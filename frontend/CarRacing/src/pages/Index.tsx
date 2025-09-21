@@ -12,6 +12,7 @@ const CarRacingGame = () => {
   const carModelRef = useRef(null);
   const enemyCar1Ref = useRef(null);
   const enemyCar2Ref = useRef(null);
+  const animationIdRef = useRef(null);
   const gameStateRef = useRef({
     isGameOver: false,
     score: 0,
@@ -27,9 +28,9 @@ const CarRacingGame = () => {
     playerBox: new THREE.Box3(),
     enemyBox1: new THREE.Box3(),
     enemyBox2: new THREE.Box3(),
-    pointBox: new THREE.Box3()
+    pointBox: new THREE.Box3(),
+    paused: false
   });
-  const animationIdRef = useRef(null);
 
   const [isLoading, setIsLoading] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState(0);
@@ -37,9 +38,9 @@ const CarRacingGame = () => {
   const [gameOver, setGameOver] = useState(false);
 
   // Game constants
-  const GAME_CONFIG = {
+  const GAME_CONFIG = useRef({
     roadWidth: 10,
-    roadLength: 200,
+    roadLength: 300,
     driveSpeed: 0.5,
     enemyCarSpeed: 0.6,
     carMoveSpeed: 0.15,
@@ -50,7 +51,7 @@ const CarRacingGame = () => {
     pointRadius: 0.3,
     buildingSpacing: 15,
     lightSpacing: 30
-  };
+  }).current;
 
   const updateScore = useCallback((newScore) => {
     gameStateRef.current.score = newScore;
@@ -169,7 +170,7 @@ const CarRacingGame = () => {
       point.position.z = GAME_CONFIG.roadLength / 2 + Math.random() * GAME_CONFIG.roadLength * 0.5;
     }
     point.visible = true;
-  }, []);
+  }, [GAME_CONFIG]);
 
   const initScene = useCallback(() => {
     const scene = new THREE.Scene();
@@ -187,12 +188,12 @@ const CarRacingGame = () => {
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2;
+    renderer.outputEncoding = THREE.sRGBEncoding;
     rendererRef.current = renderer;
 
-    // Loading manager for tracking progress
+    // Loading manager
     const loadingManager = new THREE.LoadingManager();
     loadingManager.onLoad = () => {
-      console.log("All resources loaded!");
       setIsLoading(false);
       setLoadingProgress(100);
     };
@@ -205,11 +206,10 @@ const CarRacingGame = () => {
       setIsLoading(false);
     };
 
-    // Enhanced lighting for better street atmosphere
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4); // Reduced ambient light for more dramatic look
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 2.0); // Stronger directional light
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 2.0);
     directionalLight.position.set(50, 100, 50);
     directionalLight.castShadow = true;
     directionalLight.shadow.mapSize.width = 2048;
@@ -221,32 +221,31 @@ const CarRacingGame = () => {
     directionalLight.shadow.camera.top = 50;
     directionalLight.shadow.camera.bottom = -50;
     scene.add(directionalLight);
-
-    // Add additional street lighting atmosphere
-    const streetAmbient = new THREE.AmbientLight(0xffaa55, 0.2); // Warm street light color
+    const streetAmbient = new THREE.AmbientLight(0xffaa55, 0.2);
     scene.add(streetAmbient);
 
-    // Load HDRI environment
+    // HDRI (graceful fallback)
     const hdrPath = 'https://threejs.org/examples/textures/equirectangular/';
     const hdrName = 'venice_sunset_1k.hdr';
     new RGBELoader(loadingManager)
       .setPath(hdrPath)
-      .load(hdrName, function (texture) {
+      .load(hdrName, (texture) => {
         texture.mapping = THREE.EquirectangularReflectionMapping;
         scene.environment = texture;
+        // optional: don't overwrite background if you prefer sky color
         scene.background = texture;
-      }, undefined, (error) => {
-        console.error('Error loading HDRI:', error);
+      }, undefined, (err) => {
+        console.warn('HDR load failed, using color background', err);
         scene.background = new THREE.Color(0xa0d7e6);
       });
 
     // Ground
     const groundGeo = new THREE.PlaneGeometry(GAME_CONFIG.roadWidth * 5, GAME_CONFIG.roadLength * 1.5);
-    const groundMat = new THREE.MeshStandardMaterial({ 
-      color: 0x55aa55, 
-      side: THREE.DoubleSide, 
-      roughness: 0.9, 
-      metalness: 0.1 
+    const groundMat = new THREE.MeshStandardMaterial({
+      color: 0x55aa55,
+      side: THREE.DoubleSide,
+      roughness: 0.9,
+      metalness: 0.1
     });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
@@ -254,13 +253,12 @@ const CarRacingGame = () => {
     ground.receiveShadow = true;
     scene.add(ground);
 
-    // Road - Make it darker and more realistic
+    // Road
     const roadGeo = new THREE.PlaneGeometry(GAME_CONFIG.roadWidth, GAME_CONFIG.roadLength * 1.5);
-    const roadMat = new THREE.MeshStandardMaterial({ 
-      color: 0x1a1a1a, // Much darker road
-      roughness: 0.9, 
-      metalness: 0.0,
-      bumpScale: 0.1
+    const roadMat = new THREE.MeshStandardMaterial({
+      color: 0x1a1a1a,
+      roughness: 0.9,
+      metalness: 0.0
     });
     const road = new THREE.Mesh(roadGeo, roadMat);
     road.rotation.x = -Math.PI / 2;
@@ -268,20 +266,19 @@ const CarRacingGame = () => {
     road.receiveShadow = true;
     scene.add(road);
 
-    // Road lines - Make them more visible on dark road
+    // Road lines
     const lineLength = 4;
     const lineGap = 4;
     const numLines = Math.floor(GAME_CONFIG.roadLength * 1.5 / (lineLength + lineGap));
-    const lineGeo = new THREE.PlaneGeometry(0.4, lineLength); // Slightly wider lines
-    const lineMat = new THREE.MeshStandardMaterial({ 
-      color: 0xffffff, 
-      side: THREE.DoubleSide, 
-      roughness: 0.1, 
+    const lineGeo = new THREE.PlaneGeometry(0.4, lineLength);
+    const lineMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+      roughness: 0.1,
       metalness: 0.0,
-      emissive: 0x222222, // Slight glow
+      emissive: 0x222222,
       emissiveIntensity: 0.1
     });
-    
     for (let i = 0; i < numLines; i++) {
       const line = new THREE.Mesh(lineGeo, lineMat);
       line.rotation.x = -Math.PI / 2;
@@ -374,7 +371,7 @@ const CarRacingGame = () => {
       metalness: 0.9,
       roughness: 0.1
     });
-    
+
     for (let i = 0; i < GAME_CONFIG.numPoints; i++) {
       const point = new THREE.Mesh(pointGeometry, pointMaterial);
       point.castShadow = true;
@@ -384,14 +381,13 @@ const CarRacingGame = () => {
       scene.add(point);
     }
 
-    // Load Ferrari car models
+    // Load GLTF car
     const loader = new GLTFLoader(loadingManager);
     const dracoLoader = new DRACOLoader(loadingManager);
     dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
     loader.setDRACOLoader(dracoLoader);
 
     const carUrl = 'https://threejs.org/examples/models/gltf/ferrari.glb';
-
     loader.load(carUrl, (gltf) => {
       // Player car
       const carModel = gltf.scene.clone();
@@ -400,7 +396,6 @@ const CarRacingGame = () => {
       gameStateRef.current.carBaseY = -box.min.y + 0.01;
       carModel.position.set(0, gameStateRef.current.carBaseY, 0);
       carModel.rotation.y = Math.PI;
-
       carModel.traverse((node) => {
         if (node.isMesh) {
           node.castShadow = true;
@@ -410,56 +405,48 @@ const CarRacingGame = () => {
       carModelRef.current = carModel;
       scene.add(carModel);
 
-      // Enemy cars - Create two cars from the front
+      // Enemy cars
       const enemyCar1 = gltf.scene.clone();
       enemyCar1.scale.set(0.8, 0.8, 0.8);
       const leftLaneX = -GAME_CONFIG.roadWidth / 4;
       enemyCar1.position.set(leftLaneX, gameStateRef.current.carBaseY, GAME_CONFIG.roadLength * 0.8);
-      enemyCar1.rotation.y = 0; // Enemy car faces forward
-
+      enemyCar1.rotation.y = 0;
       enemyCar1.traverse((node) => {
         if (node.isMesh) {
           node.castShadow = true;
           node.receiveShadow = true;
-          // Red color for first enemy car
           if (node.material) {
             node.material = node.material.clone();
-            node.material.color.setHex(0xcc0000); // Red color
+            node.material.color.setHex(0xcc0000);
           }
         }
       });
       enemyCar1Ref.current = enemyCar1;
       scene.add(enemyCar1);
 
-      // Second enemy car
       const enemyCar2 = gltf.scene.clone();
       enemyCar2.scale.set(0.8, 0.8, 0.8);
       const rightLaneX = GAME_CONFIG.roadWidth / 4;
       enemyCar2.position.set(rightLaneX, gameStateRef.current.carBaseY, GAME_CONFIG.roadLength * 1.2);
-      enemyCar2.rotation.y = 0; // Enemy car faces forward
-
+      enemyCar2.rotation.y = 0;
       enemyCar2.traverse((node) => {
         if (node.isMesh) {
           node.castShadow = true;
           node.receiveShadow = true;
-          // Blue color for second enemy car
           if (node.material) {
             node.material = node.material.clone();
-            node.material.color.setHex(0x0066cc); // Blue color
+            node.material.color.setHex(0x0066cc);
           }
         }
       });
       enemyCar2Ref.current = enemyCar2;
       scene.add(enemyCar2);
 
-      // Set camera position
       camera.position.set(0, gameStateRef.current.carBaseY + 3, -7);
       camera.lookAt(carModel.position.x, gameStateRef.current.carBaseY + 1, carModel.position.z + 5);
-    }, (progress) => {
-      console.log('Loading progress:', progress);
-    }, (error) => {
+    }, undefined, (error) => {
       console.error('Error loading car model:', error);
-      // Fallback to simple geometry if GLTF fails
+      // fallback geometry
       const fallbackGeo = new THREE.BoxGeometry(2, 1, 4);
       const fallbackMat = new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.5, metalness: 0.5 });
       const carModel = new THREE.Mesh(fallbackGeo, fallbackMat);
@@ -470,7 +457,6 @@ const CarRacingGame = () => {
       carModelRef.current = carModel;
       scene.add(carModel);
 
-      // Fallback enemy cars if GLTF fails
       const enemyCar1 = new THREE.Mesh(fallbackGeo, new THREE.MeshStandardMaterial({ color: 0xcc0000, roughness: 0.5, metalness: 0.5 }));
       const leftLaneX = -GAME_CONFIG.roadWidth / 4;
       enemyCar1.position.set(leftLaneX, gameStateRef.current.carBaseY, GAME_CONFIG.roadLength * 0.8);
@@ -492,13 +478,17 @@ const CarRacingGame = () => {
     if (mountRef.current) {
       mountRef.current.appendChild(renderer.domElement);
     }
-  }, [createBuilding, createStreetLight, createTrafficLight, createKerbTexture, resetPointPosition]);
+  }, [createBuilding, createStreetLight, createTrafficLight, createKerbTexture, resetPointPosition, GAME_CONFIG]);
 
   const animate = useCallback(() => {
     if (!sceneRef.current || !cameraRef.current || !rendererRef.current) return;
-    
-    animationIdRef.current = requestAnimationFrame(animate);
+    if (gameStateRef.current.paused) {
+      rendererRef.current.render(sceneRef.current, cameraRef.current);
+      animationIdRef.current = requestAnimationFrame(animate);
+      return;
+    }
 
+    animationIdRef.current = requestAnimationFrame(animate);
     if (gameStateRef.current.isGameOver) {
       rendererRef.current.render(sceneRef.current, cameraRef.current);
       return;
@@ -518,10 +508,10 @@ const CarRacingGame = () => {
     // Move buildings
     gameStateRef.current.buildings.forEach(building => {
       building.position.z -= deltaZ;
-      if (building.position.z < -sceneryRecycleDistance - building.geometry.parameters.depth / 2) {
-        const sideSign = Math.sign(building.position.x);
-        const xOffset = GAME_CONFIG.roadWidth / 2 + GAME_CONFIG.kerbWidth + 1 + Math.random() * 5 + building.geometry.parameters.width / 2;
-        building.position.set(sideSign * xOffset, building.geometry.parameters.height / 2, GAME_CONFIG.roadLength * 1.5 / 2 + Math.random() * GAME_CONFIG.buildingSpacing * 2);
+      if (building.position.z < -sceneryRecycleDistance - (building.geometry?.parameters?.depth || 0) / 2) {
+        const sideSign = Math.sign(building.position.x) || (Math.random() > 0.5 ? 1 : -1);
+        const xOffset = GAME_CONFIG.roadWidth / 2 + GAME_CONFIG.kerbWidth + 1 + Math.random() * 5 + (building.geometry?.parameters?.width || 4) / 2;
+        building.position.set(sideSign * xOffset, (building.geometry?.parameters?.height || 10) / 2, GAME_CONFIG.roadLength * 1.5 / 2 + Math.random() * GAME_CONFIG.buildingSpacing * 2);
       }
     });
 
@@ -529,7 +519,7 @@ const CarRacingGame = () => {
     gameStateRef.current.streetLights.forEach(light => {
       light.position.z -= deltaZ;
       if (light.position.z < -sceneryRecycleDistance) {
-        const sideSign = Math.sign(light.position.x);
+        const sideSign = Math.sign(light.position.x) || (Math.random() > 0.5 ? 1 : -1);
         const xPos = GAME_CONFIG.roadWidth / 2 + GAME_CONFIG.kerbWidth + 0.8;
         light.position.set(sideSign * xPos, 0, GAME_CONFIG.roadLength * 1.5 / 2 + Math.random() * GAME_CONFIG.lightSpacing * 2);
       }
@@ -539,7 +529,7 @@ const CarRacingGame = () => {
     gameStateRef.current.trafficLights.forEach(light => {
       light.position.z -= deltaZ;
       if (light.position.z < -sceneryRecycleDistance) {
-        const sideSign = Math.sign(light.position.x);
+        const sideSign = Math.sign(light.position.x) || (Math.random() > 0.5 ? 1 : -1);
         const xPos = GAME_CONFIG.roadWidth / 2 + GAME_CONFIG.kerbWidth + 0.5;
         light.position.set(sideSign * xPos, 0, GAME_CONFIG.roadLength * 1.5 / 2 + Math.random() * GAME_CONFIG.roadLength * 0.5);
       }
@@ -564,7 +554,7 @@ const CarRacingGame = () => {
     });
 
     // Move enemy cars
-    if (enemyCar1Ref.current && carModelRef.current) {
+    if (enemyCar1Ref.current) {
       enemyCar1Ref.current.position.z -= (GAME_CONFIG.enemyCarSpeed + GAME_CONFIG.driveSpeed);
       if (enemyCar1Ref.current.position.z < -sceneryRecycleDistance) {
         enemyCar1Ref.current.position.z = GAME_CONFIG.roadLength * 0.8 + Math.random() * GAME_CONFIG.roadLength * 0.5;
@@ -572,7 +562,7 @@ const CarRacingGame = () => {
       }
     }
 
-    if (enemyCar2Ref.current && carModelRef.current) {
+    if (enemyCar2Ref.current) {
       enemyCar2Ref.current.position.z -= (GAME_CONFIG.enemyCarSpeed + GAME_CONFIG.driveSpeed);
       if (enemyCar2Ref.current.position.z < -sceneryRecycleDistance) {
         enemyCar2Ref.current.position.z = GAME_CONFIG.roadLength * 1.2 + Math.random() * GAME_CONFIG.roadLength * 0.5;
@@ -581,7 +571,7 @@ const CarRacingGame = () => {
     }
 
     // Move player car
-    if (carModelRef.current && gameStateRef.current.carBaseY > 0) {
+    if (carModelRef.current && gameStateRef.current.carBaseY !== undefined) {
       let maxBounds = GAME_CONFIG.roadWidth / 2 - GAME_CONFIG.kerbWidth - 0.1;
       let carHalfWidth = 1;
       try {
@@ -589,7 +579,7 @@ const CarRacingGame = () => {
         carHalfWidth = (box.max.x - box.min.x) / 2;
         maxBounds = (GAME_CONFIG.roadWidth / 2) - GAME_CONFIG.kerbWidth - carHalfWidth - 0.1;
       } catch (e) {
-        // Use fallback values
+        // fallback
       }
 
       if (gameStateRef.current.moveLeft && carModelRef.current.position.x > -maxBounds) {
@@ -600,7 +590,9 @@ const CarRacingGame = () => {
       }
       carModelRef.current.position.x = Math.max(-maxBounds, Math.min(maxBounds, carModelRef.current.position.x));
 
-      gameStateRef.current.playerBox.setFromObject(carModelRef.current);
+      try {
+        gameStateRef.current.playerBox.setFromObject(carModelRef.current);
+      } catch (e) {}
     }
 
     // Camera follow
@@ -615,36 +607,42 @@ const CarRacingGame = () => {
       // Point collection
       gameStateRef.current.points.forEach(point => {
         if (!point.visible) return;
-        gameStateRef.current.pointBox.setFromObject(point);
-        if (gameStateRef.current.playerBox.intersectsBox(gameStateRef.current.pointBox)) {
-          const newScore = gameStateRef.current.score + GAME_CONFIG.pointValue;
-          updateScore(newScore);
-          point.visible = false;
-        }
+        try {
+          gameStateRef.current.pointBox.setFromObject(point);
+          if (gameStateRef.current.playerBox.intersectsBox(gameStateRef.current.pointBox)) {
+            const newScore = gameStateRef.current.score + GAME_CONFIG.pointValue;
+            updateScore(newScore);
+            point.visible = false;
+          }
+        } catch (e) {}
       });
 
       // Enemy collision - Check both cars
-      if (enemyCar1Ref.current && enemyCar1Ref.current.parent) {
-        gameStateRef.current.enemyBox1.setFromObject(enemyCar1Ref.current);
-        const expandedPlayerBox = gameStateRef.current.playerBox.clone().expandByScalar(0.5);
-        if (expandedPlayerBox.intersectsBox(gameStateRef.current.enemyBox1)) {
-          gameStateRef.current.isGameOver = true;
-          setGameOver(true);
-        }
+      if (enemyCar1Ref.current) {
+        try {
+          gameStateRef.current.enemyBox1.setFromObject(enemyCar1Ref.current);
+          const expandedPlayerBox = gameStateRef.current.playerBox.clone().expandByScalar(0.5);
+          if (expandedPlayerBox.intersectsBox(gameStateRef.current.enemyBox1)) {
+            gameStateRef.current.isGameOver = true;
+            setGameOver(true);
+          }
+        } catch (e) {}
       }
 
-      if (enemyCar2Ref.current && enemyCar2Ref.current.parent) {
-        gameStateRef.current.enemyBox2.setFromObject(enemyCar2Ref.current);
-        const expandedPlayerBox = gameStateRef.current.playerBox.clone().expandByScalar(0.5);
-        if (expandedPlayerBox.intersectsBox(gameStateRef.current.enemyBox2)) {
-          gameStateRef.current.isGameOver = true;
-          setGameOver(true);
-        }
+      if (enemyCar2Ref.current) {
+        try {
+          gameStateRef.current.enemyBox2.setFromObject(enemyCar2Ref.current);
+          const expandedPlayerBox = gameStateRef.current.playerBox.clone().expandByScalar(0.5);
+          if (expandedPlayerBox.intersectsBox(gameStateRef.current.enemyBox2)) {
+            gameStateRef.current.isGameOver = true;
+            setGameOver(true);
+          }
+        } catch (e) {}
       }
     }
 
     rendererRef.current.render(sceneRef.current, cameraRef.current);
-  }, [resetPointPosition, updateScore]);
+  }, [resetPointPosition, updateScore, GAME_CONFIG]);
 
   const handleRestart = useCallback(() => {
     gameStateRef.current.isGameOver = false;
@@ -670,15 +668,16 @@ const CarRacingGame = () => {
 
     // Reset scenery positions
     gameStateRef.current.roadLines.forEach((line, i) => {
-      line.position.z = (GAME_CONFIG.roadLength * 1.5 / 2) - (line.geometry.parameters.height / 2) - i * (line.geometry.parameters.height + 4);
+      const lineHeight = (line.geometry?.parameters?.height) || 4;
+      line.position.z = (GAME_CONFIG.roadLength * 1.5 / 2) - (lineHeight / 2) - i * (lineHeight + 4);
     });
 
     const numBuildings = Math.floor(GAME_CONFIG.roadLength * 1.5 / GAME_CONFIG.buildingSpacing);
     gameStateRef.current.buildings.forEach((building, i) => {
       const zPos = (GAME_CONFIG.roadLength * 1.5 / 2) - (GAME_CONFIG.buildingSpacing / 2) - (i % (numBuildings / 2)) * GAME_CONFIG.buildingSpacing;
       const sideSign = (i % 2 === 0) ? -1 : 1;
-      const xOffset = GAME_CONFIG.roadWidth / 2 + GAME_CONFIG.kerbWidth + 1 + Math.random() * 5 + building.geometry.parameters.width / 2;
-      building.position.set(sideSign * xOffset, building.geometry.parameters.height / 2, zPos);
+      const xOffset = GAME_CONFIG.roadWidth / 2 + GAME_CONFIG.kerbWidth + 1 + Math.random() * 5 + (building.geometry?.parameters?.width || 4) / 2;
+      building.position.set(sideSign * xOffset, (building.geometry?.parameters?.height || 10) / 2, zPos);
     });
 
     const numLights = Math.floor(GAME_CONFIG.roadLength * 1.5 / GAME_CONFIG.lightSpacing);
@@ -695,23 +694,45 @@ const CarRacingGame = () => {
       const xPos = GAME_CONFIG.roadWidth / 2 + GAME_CONFIG.kerbWidth + 0.5;
       light.position.set(sideSign * xPos, 0, zPos);
     });
-  }, [resetPointPosition]);
+  }, [resetPointPosition, GAME_CONFIG]);
 
   const handleKeyDown = useCallback((event) => {
     if (gameStateRef.current.isGameOver) return;
-    if (event.key === 'ArrowLeft' || event.key.toLowerCase() === 'a') {
+    const key = event.key.toLowerCase();
+    if (key === 'arrowleft' || key === 'a') {
       gameStateRef.current.moveLeft = true;
-    } else if (event.key === 'ArrowRight' || event.key.toLowerCase() === 'd') {
+    } else if (key === 'arrowright' || key === 'd') {
       gameStateRef.current.moveRight = true;
     }
   }, []);
 
   const handleKeyUp = useCallback((event) => {
-    if (event.key === 'ArrowLeft' || event.key.toLowerCase() === 'a') {
+    const key = event.key.toLowerCase();
+    if (key === 'arrowleft' || key === 'a') {
       gameStateRef.current.moveLeft = false;
-    } else if (event.key === 'ArrowRight' || event.key.toLowerCase() === 'd') {
+    } else if (key === 'arrowright' || key === 'd') {
       gameStateRef.current.moveRight = false;
     }
+  }, []);
+
+  // Mobile / pointer controls (also keep your existing circular buttons)
+  const handlePointerDownGlobal = useCallback((ev) => {
+    if (gameStateRef.current.isGameOver) return;
+    // If user touches left half of screen => left, right half => right
+    const rect = mountRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = ev.clientX || (ev.touches && ev.touches[0]?.clientX) || 0;
+    const half = rect.left + rect.width / 2;
+    if (x < half) {
+      gameStateRef.current.moveLeft = true;
+    } else {
+      gameStateRef.current.moveRight = true;
+    }
+  }, []);
+
+  const handlePointerUpGlobal = useCallback(() => {
+    gameStateRef.current.moveLeft = false;
+    gameStateRef.current.moveRight = false;
   }, []);
 
   const handleLeftButtonDown = useCallback((e) => {
@@ -739,7 +760,11 @@ const CarRacingGame = () => {
   }, []);
 
   const handleWindowResize = useCallback(() => {
-    if (cameraRef.current && rendererRef.current) {
+    if (cameraRef.current && rendererRef.current && mountRef.current) {
+      cameraRef.current.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
+      cameraRef.current.updateProjectionMatrix();
+      rendererRef.current.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+    } else if (cameraRef.current && rendererRef.current) {
       cameraRef.current.aspect = window.innerWidth / window.innerHeight;
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(window.innerWidth, window.innerHeight);
@@ -749,47 +774,99 @@ const CarRacingGame = () => {
   useEffect(() => {
     initScene();
 
-    // Event listeners
+    // Events
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('resize', handleWindowResize);
+    document.addEventListener('visibilitychange', () => {
+      gameStateRef.current.paused = document.hidden;
+    });
+    window.addEventListener('blur', () => { gameStateRef.current.paused = true; });
+    window.addEventListener('focus', () => { gameStateRef.current.paused = false; });
 
-    // Start animation loop
+    // global pointer for half-screen control
+    window.addEventListener('pointerdown', handlePointerDownGlobal, { passive: true });
+    window.addEventListener('pointerup', handlePointerUpGlobal, { passive: true });
+
+    // Start animation
     animate();
 
-    // Cleanup
     return () => {
+      // Remove event listeners
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('resize', handleWindowResize);
-      
-      if (animationIdRef.current) {
-        cancelAnimationFrame(animationIdRef.current);
+      window.removeEventListener('pointerdown', handlePointerDownGlobal);
+      window.removeEventListener('pointerup', handlePointerUpGlobal);
+      window.removeEventListener('blur', () => { gameStateRef.current.paused = true; });
+      window.removeEventListener('focus', () => { gameStateRef.current.paused = false; });
+
+      document.removeEventListener('visibilitychange', () => {
+        gameStateRef.current.paused = document.hidden;
+      });
+
+      // Cancel animation
+      if (animationIdRef.current) cancelAnimationFrame(animationIdRef.current);
+
+      // Dispose renderer and scene resources
+      try {
+        if (rendererRef.current && mountRef.current) {
+          mountRef.current.removeChild(rendererRef.current.domElement);
+        }
+        if (rendererRef.current) {
+          rendererRef.current.dispose();
+        }
+      } catch (e) { console.warn('Error removing renderer', e); }
+
+      // traverse scene and dispose geometries/materials/textures
+      try {
+        const scene = sceneRef.current;
+        if (scene) {
+          scene.traverse((obj) => {
+            if (obj.isMesh) {
+              if (obj.geometry) obj.geometry.dispose();
+              if (obj.material) {
+                if (Array.isArray(obj.material)) {
+                  obj.material.forEach((m) => {
+                    if (m.map) m.map.dispose();
+                    if (m.dispose) m.dispose();
+                  });
+                } else {
+                  if (obj.material.map) obj.material.map.dispose();
+                  if (obj.material.dispose) obj.material.dispose();
+                }
+              }
+            }
+            // dispose textures on non-mesh objects if any
+            if (obj.material && obj.material.map && obj.material.map.dispose) {
+              obj.material.map.dispose();
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('Error during scene dispose', e);
       }
-      
-      if (rendererRef.current && mountRef.current) {
-        mountRef.current.removeChild(rendererRef.current.domElement);
-        rendererRef.current.dispose();
-      }
+
+      // Clear refs
+      sceneRef.current = null;
+      cameraRef.current = null;
+      rendererRef.current = null;
+      carModelRef.current = null;
+      enemyCar1Ref.current = null;
+      enemyCar2Ref.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initScene, handleKeyDown, handleKeyUp, handleWindowResize, animate]);
 
   return (
     <div className="relative w-full h-screen overflow-hidden bg-blue-300">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
-        * {
-          font-family: 'Press Start 2P', cursive, sans-serif;
-        }
-        body {
-          margin: 0;
-          overflow: hidden;
-          overscroll-behavior: none;
-          touch-action: none;
-        }
+        * { font-family: 'Press Start 2P', cursive, sans-serif; }
+        body { margin: 0; overflow: hidden; overscroll-behavior: none; touch-action: none; }
       `}</style>
-      
-      {/* Loading Screen */}
+
+      {/* Loading */}
       {isLoading && (
         <div className="fixed inset-0 bg-black text-white flex flex-col justify-center items-center text-2xl z-50 gap-4">
           <div className="text-base">Loading Game...</div>
@@ -797,37 +874,37 @@ const CarRacingGame = () => {
         </div>
       )}
 
-      {/* Game Container */}
+      {/* Game mount */}
       <div ref={mountRef} className="w-full h-full" />
 
-      {/* UI Container */}
+      {/* HUD */}
       <div className="absolute top-2 left-2 text-white text-xl z-40 pointer-events-none"
            style={{ textShadow: '1px 1px 3px black' }}>
         <div className="mb-1">Score: {score}</div>
       </div>
 
-      {/* Game Over Screen */}
+      {/* Game Over */}
       {gameOver && (
         <div className="fixed inset-0 flex flex-col justify-center items-center text-red-500 text-4xl font-bold text-center z-50 gap-5"
              style={{ textShadow: '2px 2px 5px black' }}>
           <div>GAME OVER!</div>
-          <button 
+          <button
             onClick={handleRestart}
-            className="bg-green-600 text-white px-5 py-3 border-none rounded-lg text-base cursor-pointer transition-colors duration-300 hover:bg-blue-700"
-            style={{ boxShadow: '2px 2px 5px rgba(0, 0, 0, 0.5)' }}
+            className="bg-green-600 text-white px-5 py-3 rounded-lg text-base cursor-pointer transition-colors duration-300 hover:bg-blue-700"
+            style={{ boxShadow: '2px 2px 5px rgba(0,0,0,0.5)' }}
           >
             Restart
           </button>
         </div>
       )}
 
-      {/* Mobile Controls */}
-      <div 
+      {/* Mobile Controls: left and right visible buttons */}
+      <div
         className="fixed bottom-5 left-5 w-20 h-20 bg-white bg-opacity-30 border-2 border-black border-opacity-50 rounded-full z-40 flex justify-center items-center text-3xl text-black text-opacity-70 cursor-pointer select-none active:bg-white active:bg-opacity-50"
         onPointerDown={handleLeftButtonDown}
         onPointerUp={handleLeftButtonUp}
         onPointerLeave={handleLeftButtonUp}
-        style={{ 
+        style={{
           userSelect: 'none',
           WebkitUserSelect: 'none',
           msUserSelect: 'none',
@@ -838,12 +915,12 @@ const CarRacingGame = () => {
         ◀
       </div>
 
-      <div 
+      <div
         className="fixed bottom-5 right-5 w-20 h-20 bg-white bg-opacity-30 border-2 border-black border-opacity-50 rounded-full z-40 flex justify-center items-center text-3xl text-black text-opacity-70 cursor-pointer select-none active:bg-white active:bg-opacity-50"
         onPointerDown={handleRightButtonDown}
         onPointerUp={handleRightButtonUp}
         onPointerLeave={handleRightButtonUp}
-        style={{ 
+        style={{
           userSelect: 'none',
           WebkitUserSelect: 'none',
           msUserSelect: 'none',
@@ -857,8 +934,6 @@ const CarRacingGame = () => {
   );
 };
 
-const Index = () => {
-  return <CarRacingGame />;
-};
+const Index = () => <CarRacingGame />;
 
 export default Index;
